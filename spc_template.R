@@ -1,6 +1,5 @@
 
 # Statistical Process Control chart template ####
-
 library(easypackages)
 
 libraries(c("readxl", "readr", "plyr", "dplyr", "ggplot2", "png", "tidyverse", "reshape2", "scales", 'jsonlite', 'zoo'))
@@ -12,6 +11,9 @@ github_repo_dir <- '~/Documents/Repositories/spc'
 # Brilliant post I found after a few hours trying to figure out the difference between SD and sigma. https://r-bar.net/xmr-control-chart-tutorial-examples/ this explains the constant value 1.128
 
 # This is also a very very useful guide for when to use SPCs, which rules to apply and sensible tips for when to recalculate limits or produce multiple process SPCs.
+
+# ‘Common cause variation’ is just that; common. Every normal process will exhibit natural (or common cause) variation. In healthcare, every patient is different, so every process will have inbuilt variation. Even simple processes exhibit variation. Just think about signing your name. Is your signature identical every time or just similar?
+# ‘Special cause’ variation is something abnormal, the result of a specific change that has affected the process in a way beyond what would be expected under normal conditions.
 
 # SPC using moving range not SD. The moving range is sequence sensitive and demphasizes systematic variation, allowing us to more clearly measure the inherent random process variation. The standard deviation is a measure of total variation (ie., systematic variation & random variation).
 
@@ -36,7 +38,6 @@ lower_control_limit <- process_mean - (seq_dev * 3)
 upper_control_limit <- process_mean + (seq_dev * 3)
 
 rm(df, lower_control_limit, upper_control_limit, seq_dev, mean_mR, process_mean)
-
 
 # In one dataframe we create the metrics and then apply some rules for patterns in the processes.
 
@@ -78,7 +79,13 @@ df1 <- data.frame(ScrewID = seq(1,21,1), Length	=c(2.98,	2.96,	2.86,	2.74,	2.7,	
   mutate(top_label = ifelse(rule_1 == 'Special cause concern', 'Special cause concern', ifelse(rule_2 %in% c('Run above (shift)', 'Run below (shift)'), rule_2, ifelse(rule_3 %in% c('Trend down (drift)', 'Trend up (drift)'), rule_3, 'Common cause variation')))) %>% 
   mutate(variation_label = ifelse(rule_1 == 'Special cause concern', 'Special cause variation', ifelse(rule_2 %in% c('Run above (shift)', 'Run below (shift)'), 'Special cause variation', ifelse(rule_3 %in% c('Trend down (drift)', 'Trend up (drift)'), 'Special cause variation', 'Common cause variation')))) # What is an improvement and what is concern will depend on the context. in a purely variation context (where you want things to stay within limits), trends (drift) and runs (shift) as well as points outside of limits may be of concern regardless of whether they are above or below the process mean. In cases where higher values are good then you may want to mark upward trends (drift) and above mean runs as improvement and below mean runs and downward drifts as special variation of concern.
 
+# TO DO 
+
+# Add a rule that highlights if two out of three consecutive points are in the sigma 2-3 zone
+# Add a rule that highlights if 15 consecutive points are within +/- 1 sigma zone as 'huggers'
+
 # What value rule should take prescedent? A single value might be a special cause of concern as well as in a run of above process mean and in a trend of increasing values.
+
 
 # NHS Improvement use icons to signify overall performance of the whole data series. There are five outcomes - 1) common cause variation (random/natural variation only). 2) special cause variation in relation to high values (e.g. values above upper control limit, or consistent consecutive pattern of values above process mean/target). 3) special cause variation in relation to low values (e.g. values below lower control limit, or consistent consecutive pattern of values below process mean/target indicative of a shift). 4) special cause variation in relation to upward trends indicative of improvement (e.g. consecutive values increasing over time (usually 6 or 7 points)). 5) special cause variation in relation to downward trends indicative of improvement (e.g. consecutive values decreasing over time).
 
@@ -98,9 +105,18 @@ df1 <- data.frame(ScrewID = seq(1,21,1), Length	=c(2.98,	2.96,	2.86,	2.74,	2.7,	
 
 # If you have several processes going on you may wish to split the dataset into those processes and produce an SPC for each one. An example of this can be daily admissions to hospital. Monday admissions may be very different to the rest of the working week and different still to weekend admissions. You may consider plotting a monday, a tuesday to friday and a saturday/sunday SPC.
 
+# SPC charts can also enable you to see if a particular process can meet a specific target. The calculation used will determine the process capability. 
+# The calculation used to determine process capability is:
+# Capability = Target - Average / (3 * standard deviation)
+
+# A value of 1 means the process is 100% capable of achieving the target. A negative figure means more than 50% of patients will not meet a given target.
+
+# The procedure for calculating process capability is therefore:
+# • Test for stability by plotting a control chart first
+# • If unstable, gain control by identifying and controlling the main factors that affect the situation
+# • Only if it is stable, calculate a process capability to determine if it is capable of meeting the target
 
 # Real world data ####
-
 # Delayed transfers of care.
 # Unplanned hospital admissions.
 # SSS or Health check numbers
