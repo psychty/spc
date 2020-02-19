@@ -46,7 +46,7 @@ rm(df, lower_control_limit, upper_control_limit, seq_dev, mean_mR, process_mean)
 run_length <- 6
 trend_length <- 7
 
-df1 <- data.frame(ScrewID = seq(1,21,1), Length	=c(2.98,	2.96,	2.86,	2.74,	2.7,	2.5,	2.00,	2.92,	2.97,	2.97,	3.09,	3.07,	2.99,	3.06,	3.05,	3.02,	3.07,	3.06,	3.07,	3, 2)) %>%
+df1 <- data.frame(ScrewID = seq(1,21,1), Length	= c(2.98,	2.96,	2.86,	2.74,	2.7,	2.5,	2.00,	2.92,	2.97,	2.97,	3.09,	3.07,	2.99,	3.06,	3.05,	3.02,	3.07,	3.06,	3.07,	3, 2)) %>%
   mutate(process_mean = mean(Length, na.rm = TRUE)) %>% 
   mutate(mR = abs(Length - lag(Length))) %>% 
   mutate(mean_mR = mean(mR, na.rm = TRUE)) %>% 
@@ -57,6 +57,7 @@ df1 <- data.frame(ScrewID = seq(1,21,1), Length	=c(2.98,	2.96,	2.86,	2.74,	2.7,	
          one_sigma_uci = process_mean + seq_dev,
          two_sigma_lci = process_mean - (seq_dev * 2),
          two_sigma_uci = process_mean + (seq_dev * 2)) %>% 
+  mutate(location = ifelse(Length > upper_control_limit, 'Outside +/- 3sigma', ifelse(Length < lower_control_limit, 'Outside +/- 3sigma', ifelse(Length > two_sigma_uci, 'Between +/- 2sigma and 3sigma', ifelse(Length < two_sigma_lci, 'Between +/- 2sigma and 3sigma', ifelse(Length > one_sigma_uci, 'Between +/- 1sigma and 2sigma', ifelse(Length < one_sigma_lci, 'Between +/- 1sigma and 2sigma', 'Within +/- 1sigma'))))))) %>% 
   mutate(rule_1 = ifelse(Length > upper_control_limit, 'Special cause concern', ifelse(Length < lower_control_limit, 'Special cause concern', 'Common cause variation'))) %>% # This highlights any values outside the control limits
   mutate(above_mean = ifelse(Length > process_mean, 1, 0)) %>% # above_mean is 1 if the value is above the mean and 0 if not.
   mutate(rule_2a = rollapplyr(above_mean, run_length, sum, align = 'right', partial = TRUE)) %>% # sum the last five (or whatever 'run_length' is) values for 'above_mean'. if the sum is 5 (or whatever 'run_length' is set to) then you know that there have been at least this many consecutive values above the process mean and this constitues a 'run'. 
@@ -83,6 +84,46 @@ df1 <- data.frame(ScrewID = seq(1,21,1), Length	=c(2.98,	2.96,	2.86,	2.74,	2.7,	
 
 # Add a rule that highlights if two out of three consecutive points are in the sigma 2-3 zone
 # Add a rule that highlights if 15 consecutive points are within +/- 1 sigma zone as 'huggers'
+
+ggplot(data = df1, aes(x = ScrewID, y = Length, group = 1)) +
+  geom_line(aes(colour = location)) +
+  geom_point(aes(fill =  location), 
+             colour="#61B5CD", 
+             size = 4, 
+             shape = 21) +
+geom_hline(aes(yintercept = lower_control_limit),
+           colour = "#A8423F",
+           linetype="dotted",
+           lwd = .7) +
+geom_hline(aes(yintercept = upper_control_limit),
+           colour = "#A8423F",
+           linetype="dotted",
+           lwd = .7) +
+geom_hline(aes(yintercept = two_sigma_uci),
+     colour = "#3d2b65",
+     linetype="dashed",
+     lwd = .7) +
+geom_hline(aes(yintercept = two_sigma_lci),
+     colour = "#3d2b65",
+     linetype="dashed",
+     lwd = .7) +
+geom_hline(aes(yintercept = two_sigma_uci),
+             colour = "#3d2b65",
+             linetype="solid",
+             lwd = .4) +
+geom_hline(aes(yintercept = two_sigma_lci),
+             colour = "#3d2b65",
+             linetype="solid",
+             lwd = .4) +  
+  
+geom_hline(aes(yintercept = process_mean),
+colour = "#264852",
+lwd = .8) +
+scale_x_continuous(breaks = seq(0,nrow(df1), 1)) +
+labs(caption = "Note: Y axis does not start at zero.\nThe red dotted lines represent 99% control limits (3σ, moving range) control limits respectively\nThe solid line represents the long term average.")
+
+
+
 
 # What value rule should take prescedent? A single value might be a special cause of concern as well as in a run of above process mean and in a trend of increasing values.
 
