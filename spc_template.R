@@ -4,11 +4,12 @@ library(easypackages)
 
 libraries(c("readxl", "readr", "plyr", "dplyr", "ggplot2", "png", "tidyverse", "reshape2", "scales", 'jsonlite', 'zoo'))
 
-# Using DToC data from NHS Digital ####
-
-github_repo_dir <- '~/Documents/Repositories/spc'
-
 # Brilliant post I found after a few hours trying to figure out the difference between SD and sigma. https://r-bar.net/xmr-control-chart-tutorial-examples/ this explains the constant value 1.128
+
+# These are our conditions periods. We will want to highlight any consecutive data points in which the last five are above or below the process mean, in addition we want to highlight any periods of six or more values which are increasing or decreasing.
+
+run_length <- 6
+trend_length <- 7
 
 # This is also a very very useful guide for when to use SPCs, which rules to apply and sensible tips for when to recalculate limits or produce multiple process SPCs.
 
@@ -26,13 +27,10 @@ df <- data.frame(ScrewID = seq(1,20,1), Length	=c(2.92,	2.96,	2.86,	3.04,	3.07,	
 
 # Calculate the moving range, which is the absolute difference between each point and its predecessor 
 process_mean <- mean(df$Length)
-
 # Now calculate the mean(mR)
 mean_mR <-  mean(df$mR, na.rm = TRUE)
-
 # Convert mean(mR) to sequential deviation (or sigma)
 seq_dev <- mean_mR / 1.128
-
 # Use sequential deviation to calculate control limits
 lower_control_limit <- process_mean - (seq_dev * 3)
 upper_control_limit <- process_mean + (seq_dev * 3)
@@ -41,12 +39,7 @@ rm(df, lower_control_limit, upper_control_limit, seq_dev, mean_mR, process_mean)
 
 # In one dataframe we create the metrics and then apply some rules for patterns in the processes.
 
-# These are our conditions periods. We will want to highlight any consecutive data points in which the last five are above or below the process mean, in addition we want to highlight any periods of six or more values which are increasing or decreasing.
-
-run_length <- 6
-trend_length <- 7
-
-df1 <- data.frame(ScrewID = seq(1,21,1), Length	= c(2.98,	2.96,	2.86,	2.74,	2.7,	2.5,	2.00,	2.92,	2.97,	2.97,	3.09,	3.07,	2.99,	3.06,	3.05,	3.02,	3.07,	3.06,	3.07,	3, 2)) %>%
+df1 <- data.frame(ScrewID = seq(1,21,1), Length	= c(2.98,	2.96,	2.86,	2.74,	2.86,	2.5,	2.45,	2.52,	2.4,	2.97,	3.09,	3.07,	2.99,	3.06,	3.05,	3.02,	3.07,	3.06,	3.07,	3, 2)) %>%
   mutate(process_mean = mean(Length, na.rm = TRUE)) %>% 
   mutate(mR = abs(Length - lag(Length))) %>% 
   mutate(mean_mR = mean(mR, na.rm = TRUE)) %>% 
@@ -77,18 +70,28 @@ df1 <- data.frame(ScrewID = seq(1,21,1), Length	= c(2.98,	2.96,	2.86,	2.74,	2.7,
   mutate(rule_3b_label = rollapply(rule_3b, trend_length, function(x)if(any(x == trend_length)) 'Trend up (drift)' else 'No trend', align = 'left', partial = TRUE)) %>%
   mutate(rule_3 = ifelse(rule_3a_label == 'Trend down (drift)', rule_3a_label, rule_3b_label)) %>% 
   select(-c(trend_down, trend_up, rule_3a, rule_3a_label, rule_3b, rule_3b_label)) %>%
-  mutate(top_label = ifelse(rule_1 == 'Special cause concern', 'Special cause concern', ifelse(rule_2 %in% c('Run above (shift)', 'Run below (shift)'), rule_2, ifelse(rule_3 %in% c('Trend down (drift)', 'Trend up (drift)'), rule_3, 'Common cause variation')))) %>% 
-  mutate(variation_label = ifelse(rule_1 == 'Special cause concern', 'Special cause variation', ifelse(rule_2 %in% c('Run above (shift)', 'Run below (shift)'), 'Special cause variation', ifelse(rule_3 %in% c('Trend down (drift)', 'Trend up (drift)'), 'Special cause variation', 'Common cause variation')))) # What is an improvement and what is concern will depend on the context. in a purely variation context (where you want things to stay within limits), trends (drift) and runs (shift) as well as points outside of limits may be of concern regardless of whether they are above or below the process mean. In cases where higher values are good then you may want to mark upward trends (drift) and above mean runs as improvement and below mean runs and downward drifts as special variation of concern.
+  mutate(close_to_limit = ifelse(location == 'Between +/- 2sigma and 3sigma', 1, 0)) %>% 
+  mutate(rule_4 = rollapplyr(close_to_limit, 3, sum, align = 'right', partial = TRUE)) %>% 
+  mutate(rule_4_label = ifelse(rule_4 >= 2, 'Close to limits', ifelse(lead(rule_4,1) >= 2, 'Close to limits', 'Not two out of three'))) %>% 
+  mutate(rule_4_label = ifelse(is.na(rule_4_label), ifelse(rule_4 >= 2, 'Close to limits', 'Not two out of three'), rule_4_label)) %>% 
+  mutate(rule_4 = rule_4_label) %>% 
+  select(-c(rule_4_label, close_to_limit)) %>% 
+  mutate(no_variation = ifelse(location == 'Within +/- 1sigma', 1, 0)) %>% 
+  mutate(rule_5 = rollapplyr(no_variation, 15, sum, align = 'right', partial = TRUE)) %>% 
+  mutate(rule_5 = rollapply(rule_5, 15, function(x)if(any(x == 15)) 'Little variation' else 'Variation', align = 'left', partial = TRUE)) %>% 
+  select(-no_variation) %>% 
+  mutate(top_label = factor(ifelse(rule_1 == 'Special cause concern', 'Special cause concern', ifelse(rule_2 %in% c('Run above (shift)', 'Run below (shift)'), rule_2, ifelse(rule_3 %in% c('Trend down (drift)', 'Trend up (drift)'), rule_3, ifelse(rule_4 == 'Close to limits', 'Close to limits', ifelse(rule_5 == 'Little variation', rule_5, 'Common cause variation'))))), levels = c('Common cause variation', 'Close to limits', 'Special cause concern', 'Run above (shift)', 'Run below (shift)','Trend up (drift)', 'Trend down (drift)', 'Little variation'))) %>% 
+  mutate(variation_label = factor(ifelse(rule_1 == 'Special cause concern', 'Special cause variation', ifelse(rule_2 %in% c('Run above (shift)', 'Run below (shift)'), 'Special cause variation', ifelse(rule_3 %in% c('Trend down (drift)', 'Trend up (drift)'), 'Special cause variation', 'Common cause variation'))), levels = c('Common cause variation', 'Special cause concern'))) # What is an improvement and what is concern will depend on the context. in a purely variation context (where you want things to stay within limits), trends (drift) and runs (shift) as well as points outside of limits may be of concern regardless of whether they are above or below the process mean. In cases where higher values are good then you may want to mark upward trends (drift) and above mean runs as improvement and below mean runs and downward drifts as special variation of concern.
 
 # TO DO 
 
-# Add a rule that highlights if two out of three consecutive points are in the sigma 2-3 zone
-# Add a rule that highlights if 15 consecutive points are within +/- 1 sigma zone as 'huggers'
-
 ggplot(data = df1, aes(x = ScrewID, y = Length, group = 1)) +
-  geom_line(aes(colour = location)) +
-  geom_point(aes(fill =  location), 
-             colour="#61B5CD", 
+  geom_hline(aes(yintercept = process_mean),
+             colour = "#264852",
+             lwd = .8) +
+  geom_line(colour = '#999999') +
+  geom_point(aes(fill =  top_label,
+                 colour = top_label), 
              size = 4, 
              shape = 21) +
 geom_hline(aes(yintercept = lower_control_limit),
@@ -100,33 +103,126 @@ geom_hline(aes(yintercept = upper_control_limit),
            linetype="dotted",
            lwd = .7) +
 geom_hline(aes(yintercept = two_sigma_uci),
-     colour = "#3d2b65",
-     linetype="dashed",
-     lwd = .7) +
+           colour = "#3d2b65",
+           linetype="dashed",
+           lwd = .7) +
 geom_hline(aes(yintercept = two_sigma_lci),
-     colour = "#3d2b65",
-     linetype="dashed",
-     lwd = .7) +
-geom_hline(aes(yintercept = two_sigma_uci),
-             colour = "#3d2b65",
-             linetype="solid",
-             lwd = .4) +
-geom_hline(aes(yintercept = two_sigma_lci),
-             colour = "#3d2b65",
-             linetype="solid",
-             lwd = .4) +  
-  
-geom_hline(aes(yintercept = process_mean),
-colour = "#264852",
-lwd = .8) +
+           colour = "#3d2b65",
+           linetype="dashed",
+           lwd = .7) +
+geom_hline(aes(yintercept = one_sigma_uci),
+           colour = "#45748d",
+           linetype="solid",
+           lwd = .4) +
+geom_hline(aes(yintercept = one_sigma_lci),
+           colour = "#45748d",
+           linetype="solid",
+           lwd = .4) +  
 scale_x_continuous(breaks = seq(0,nrow(df1), 1)) +
-labs(caption = "Note: Y axis does not start at zero.\nThe red dotted lines represent 99% control limits (3σ, moving range) control limits respectively\nThe solid line represents the long term average.")
+scale_fill_manual(values= c("#b5a7b6","#fdbf00","#cc6633", "#61b8d2","#00fdf6","#832157","#ef4d96", '#5a535b'),
+                  breaks = c('Common cause variation', 'Close to limits', 'Special cause concern', 'Run above (shift)', 'Run below (shift)','Trend up (drift)', 'Trend down (drift)', 'Little variation'),
+                  limits = c('Common cause variation', 'Close to limits', 'Special cause concern', 'Run above (shift)', 'Run below (shift)','Trend up (drift)', 'Trend down (drift)', 'Little variation'),
+                  name = 'Variation key') +  
+  scale_colour_manual(values=  c("#b5a7b6","#fdbf00","#cc6633", "#61b8d2","#00fdf6","#832157","#ef4d96", '#5a535b'),
+                    breaks = c('Common cause variation', 'Close to limits', 'Special cause concern', 'Run above (shift)', 'Run below (shift)','Trend up (drift)', 'Trend down (drift)', 'Little variation'),
+                    limits = c('Common cause variation', 'Close to limits', 'Special cause concern', 'Run above (shift)', 'Run below (shift)','Trend up (drift)', 'Trend down (drift)', 'Little variation'),
+                    name = 'Variation key') +  
+labs(caption = "Note: Y axis does not start at zero.\nThe red dotted lines represent 99% control limits (3σ, moving range) control limits respectively.\nThe thick solid line represents the long term average.") +
+  theme(legend.position = "bottom", 
+        # axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5, size = 8), 
+        plot.background = element_rect(fill = "white", colour = "#E2E2E3"), 
+        panel.background = element_rect(fill = '#ffffff'),
+        axis.line = element_line(colour = "#E7E7E7", size = .3),
+        axis.text = element_text(colour = "#000000", size = 8), 
+        plot.title = element_text(colour = "#000000", face = "bold", size = 10, vjust = -.5), 
+        axis.title = element_text(colour = "#000000", face = "bold", size = 8),     
+        panel.grid = element_blank(), 
+        strip.background = element_rect(fill = "#327d9c"),
+        axis.ticks = element_line(colour = "#9e9e9e"),
+        legend.key = element_rect(fill = '#ffffff'),
+        legend.text = element_text(colour = "#000000", size = 8),
+        legend.title = element_text(face = 'bold', size = 8))
 
+# The following is the same plot but with coloured regions rather than control lines
 
-
+ggplot(data = df1, aes(x = ScrewID, y = Length, group = 1)) +
+  annotate('rect',
+         xmin = -Inf,
+         xmax = Inf,
+         ymin = df1$one_sigma_lci,
+         ymax = df1$one_sigma_uci,
+         fill = '#d2e8f5',
+         alpha = .01) +
+  annotate('rect',
+           xmin = -Inf,
+           xmax = Inf,
+           ymin = df1$one_sigma_uci,
+           ymax = df1$two_sigma_uci,
+           fill = '#ffecd4',
+           alpha = .01) +
+  annotate('rect',
+           xmin = -Inf,
+           xmax = Inf,
+           ymin = df1$one_sigma_lci,
+           ymax = df1$two_sigma_lci,
+           fill = '#ffecd4',
+           alpha = .01) +
+  annotate('rect',
+           xmin = -Inf,
+           xmax = Inf,
+           ymin = df1$two_sigma_uci,
+           ymax = df1$upper_control_limit,
+           fill = '#edcf66',
+           alpha = .01) +
+  annotate('rect',
+           xmin = -Inf,
+           xmax = Inf,
+           ymin = df1$two_sigma_lci,
+           ymax = df1$lower_control_limit,
+           fill = '#edcf66',
+           alpha = .01) +
+  geom_hline(aes(yintercept = process_mean),
+             colour = "#264852",
+             lwd = .8) +
+  geom_hline(aes(yintercept = lower_control_limit),
+             colour = "#A8423F",
+             linetype="dotted",
+             lwd = .7) +
+  geom_hline(aes(yintercept = upper_control_limit),
+             colour = "#A8423F",
+             linetype="dotted",
+             lwd = .7) +
+  geom_line(colour = '#999999') +
+  geom_point(aes(fill =  top_label,
+                 colour = top_label), 
+             size = 4, 
+             shape = 21) +
+  scale_x_continuous(breaks = seq(0,nrow(df1), 1)) +
+  scale_fill_manual(values= c("#b5a7b6","#fdbf00","#cc6633", "#61b8d2","#00fdf6","#832157","#ef4d96", '#5a535b'),
+                    breaks = c('Common cause variation', 'Close to limits', 'Special cause concern', 'Run above (shift)', 'Run below (shift)','Trend up (drift)', 'Trend down (drift)', 'Little variation'),
+                    limits = c('Common cause variation', 'Close to limits', 'Special cause concern', 'Run above (shift)', 'Run below (shift)','Trend up (drift)', 'Trend down (drift)', 'Little variation'),
+                    name = 'Variation key') +  
+  scale_colour_manual(values=  c("#b5a7b6","#fdbf00","#cc6633", "#61b8d2","#00fdf6","#832157","#ef4d96", '#5a535b'),
+                      breaks = c('Common cause variation', 'Close to limits', 'Special cause concern', 'Run above (shift)', 'Run below (shift)','Trend up (drift)', 'Trend down (drift)', 'Little variation'),
+                      limits = c('Common cause variation', 'Close to limits', 'Special cause concern', 'Run above (shift)', 'Run below (shift)','Trend up (drift)', 'Trend down (drift)', 'Little variation'),
+                      name = 'Variation key') +  
+  labs(caption = "Note: Y axis does not start at zero.\nThe red dotted lines represent 99% control limits (3σ, moving range) control limits respectively\nThe solid line represents the long term average.") +
+  theme(legend.position = "bottom", 
+        # axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5, size = 8), 
+        plot.background = element_rect(fill = "white", colour = "#E2E2E3"), 
+        panel.background = element_rect(fill = '#ffffff'),
+        axis.line = element_line(colour = "#E7E7E7", size = .3),
+        axis.text = element_text(colour = "#000000", size = 8), 
+        plot.title = element_text(colour = "#000000", face = "bold", size = 10, vjust = -.5), 
+        axis.title = element_text(colour = "#000000", face = "bold", size = 8),     
+        panel.grid = element_blank(), 
+        strip.background = element_rect(fill = "#327d9c"),
+        axis.ticks = element_line(colour = "#9e9e9e"),
+        legend.key = element_rect(fill = '#ffffff'),
+        legend.text = element_text(colour = "#000000", size = 8),
+        legend.title = element_text(face = 'bold', size = 8))
 
 # What value rule should take prescedent? A single value might be a special cause of concern as well as in a run of above process mean and in a trend of increasing values.
-
 
 # NHS Improvement use icons to signify overall performance of the whole data series. There are five outcomes - 1) common cause variation (random/natural variation only). 2) special cause variation in relation to high values (e.g. values above upper control limit, or consistent consecutive pattern of values above process mean/target). 3) special cause variation in relation to low values (e.g. values below lower control limit, or consistent consecutive pattern of values below process mean/target indicative of a shift). 4) special cause variation in relation to upward trends indicative of improvement (e.g. consecutive values increasing over time (usually 6 or 7 points)). 5) special cause variation in relation to downward trends indicative of improvement (e.g. consecutive values decreasing over time).
 
@@ -135,6 +231,8 @@ labs(caption = "Note: Y axis does not start at zero.\nThe red dotted lines repre
 # What constitues special cause and common cause variation and improvement will depend on polarity of the data in question
 
 # Further, the rules applied to the dataset will also depend on what you are trying to identify. You may want to apply different rules to different tasks. For example, you could use 1 and 2 sigma limits to show areas that may be of concern.
+
+# They also count the number of rules triggered over the period. We could look to do this.
 
 # Assurance
 # For assessing likelihood of meeting a target you should expect values to consistently stay above the target.
@@ -157,7 +255,20 @@ labs(caption = "Note: Y axis does not start at zero.\nThe red dotted lines repre
 # • If unstable, gain control by identifying and controlling the main factors that affect the situation
 # • Only if it is stable, calculate a process capability to determine if it is capable of meeting the target
 
+# to do ####
+# add group_by for different time points and recalculating limits
+# add summary to identify number of times each rule is triggered.
+
 # Real world data ####
+
+# I have a local store of this repository. 
+github_repo_dir <- '~/Documents/Repositories/spc'
+
+# If you do not have it then the command here will change the github_repo_dir to a url so you can download the files directly from the github repository.
+if(!file.exists(github_repo_dir)){
+github_repo_dir <- 'https://raw.githubusercontent.com/psychty/spc/master'
+}
+
 # Delayed transfers of care.
 # Unplanned hospital admissions.
 # SSS or Health check numbers
@@ -166,7 +277,133 @@ dtoc_ts <- read_csv(paste0(github_repo_dir, '/DToC_Days_Reason_for_Delay.csv'), 
   mutate(Month = paste0("01 ", Period)) %>% 
   mutate(Month = as.Date(Month, '%d %B %Y')) %>% 
   select("Total Delayed Transfers of Care", "Period","Month", "Name") %>% 
-  arrange(Month)
+  rename(DTOCs = 'Total Delayed Transfers of Care') %>% 
+  group_by(Name) %>% 
+  arrange(Month) %>% 
+  mutate(process_mean = mean(DTOCs, na.rm = TRUE)) %>% 
+  mutate(mR = abs(DTOCs - lag(DTOCs))) %>% 
+  mutate(mean_mR = mean(mR, na.rm = TRUE)) %>% 
+  mutate(seq_dev = mean_mR / 1.128) %>% 
+  mutate(lower_control_limit = process_mean - (seq_dev * 3),
+         upper_control_limit = process_mean + (seq_dev * 3)) %>% 
+  mutate(one_sigma_lci = process_mean - seq_dev,
+         one_sigma_uci = process_mean + seq_dev,
+         two_sigma_lci = process_mean - (seq_dev * 2),
+         two_sigma_uci = process_mean + (seq_dev * 2)) %>% 
+  mutate(location = ifelse(DTOCs > upper_control_limit, 'Outside +/- 3sigma', ifelse(DTOCs < lower_control_limit, 'Outside +/- 3sigma', ifelse(DTOCs > two_sigma_uci, 'Between +/- 2sigma and 3sigma', ifelse(DTOCs < two_sigma_lci, 'Between +/- 2sigma and 3sigma', ifelse(DTOCs > one_sigma_uci, 'Between +/- 1sigma and 2sigma', ifelse(DTOCs < one_sigma_lci, 'Between +/- 1sigma and 2sigma', 'Within +/- 1sigma'))))))) %>% 
+  mutate(rule_1 = ifelse(DTOCs > upper_control_limit, 'Special cause concern', ifelse(DTOCs < lower_control_limit, 'Special cause concern', 'Common cause variation'))) %>%
+  mutate(above_mean = ifelse(DTOCs > process_mean, 1, 0)) %>% 
+  mutate(rule_2a = rollapplyr(above_mean, run_length, sum, align = 'right', partial = TRUE)) %>% 
+  mutate(rule_2a_label = rollapply(rule_2a, run_length, function(x)if(any(x == run_length)) 'Run above (shift)' else 'No run', align = 'left', partial = TRUE)) %>% 
+  mutate(below_mean = ifelse(DTOCs < process_mean, 1, 0)) %>% 
+  mutate(rule_2b = rollapplyr(below_mean, run_length, sum, partial = TRUE)) %>%
+  mutate(rule_2b_label = rollapply(rule_2b, run_length, function(x)if(any(x == run_length)) 'Run below (shift)' else 'No run', align = 'left', partial = TRUE)) %>%
+  mutate(rule_2 = ifelse(rule_2a_label == 'Run above (shift)', rule_2a_label, rule_2b_label)) %>% 
+  select(-c(above_mean, below_mean, rule_2a, rule_2a_label, rule_2b, rule_2b_label)) %>% 
+  mutate(trend_down = ifelse(DTOCs < lag(DTOCs, 1), 1, 0)) %>% 
+  mutate(trend_down = ifelse(is.na(trend_down), lead(trend_down, 1), trend_down)) %>% 
+  mutate(rule_3a = rollapplyr(trend_down, trend_length, sum, align = 'right', partial = TRUE)) %>% 
+  mutate(rule_3a_label = rollapply(rule_3a, trend_length, function(x)if(any(x == trend_length)) 'Trend down (drift)' else 'No trend', align = 'left', partial = TRUE)) %>%
+  mutate(trend_up = ifelse(DTOCs > lag(DTOCs, 1), 1, 0)) %>% 
+  mutate(trend_up = ifelse(is.na(trend_up), lead(trend_up, 1), trend_up)) %>% 
+  mutate(rule_3b = rollapplyr(trend_up, trend_length, sum, align = 'right', partial = TRUE)) %>% 
+  mutate(rule_3b_label = rollapply(rule_3b, trend_length, function(x)if(any(x == trend_length)) 'Trend up (drift)' else 'No trend', align = 'left', partial = TRUE)) %>%
+  mutate(rule_3 = ifelse(rule_3a_label == 'Trend down (drift)', rule_3a_label, rule_3b_label)) %>% 
+  select(-c(trend_down, trend_up, rule_3a, rule_3a_label, rule_3b, rule_3b_label)) %>%
+  mutate(close_to_limit = ifelse(location == 'Between +/- 2sigma and 3sigma', 1, 0)) %>% 
+  mutate(rule_4 = rollapplyr(close_to_limit, 3, sum, align = 'right', partial = TRUE)) %>% 
+  mutate(rule_4_label = ifelse(rule_4 >= 2, 'Close to limits', ifelse(lead(rule_4,1) >= 2, 'Close to limits', 'Not two out of three'))) %>% 
+  mutate(rule_4_label = ifelse(is.na(rule_4_label), ifelse(rule_4 >= 2, 'Close to limits', 'Not two out of three'), rule_4_label)) %>% 
+  mutate(rule_4 = rule_4_label) %>% 
+  select(-c(rule_4_label, close_to_limit)) %>% 
+  mutate(no_variation = ifelse(location == 'Within +/- 1sigma', 1, 0)) %>% 
+  mutate(rule_5 = rollapplyr(no_variation, 15, sum, align = 'right', partial = TRUE)) %>% 
+  mutate(rule_5 = rollapply(rule_5, 15, function(x)if(any(x == 15)) 'Little variation' else 'Variation', align = 'left', partial = TRUE)) %>% 
+  select(-no_variation) %>% 
+  mutate(top_label = factor(ifelse(rule_1 == 'Special cause concern', 'Special cause concern', ifelse(rule_2 %in% c('Run above (shift)', 'Run below (shift)'), rule_2, ifelse(rule_3 %in% c('Trend down (drift)', 'Trend up (drift)'), rule_3, ifelse(rule_4 == 'Close to limits', 'Close to limits', ifelse(rule_5 == 'Little variation', rule_5, 'Common cause variation'))))), levels = c('Common cause variation', 'Close to limits', 'Special cause concern', 'Run above (shift)', 'Run below (shift)','Trend up (drift)', 'Trend down (drift)', 'Little variation'))) %>% 
+  mutate(variation_label = factor(ifelse(rule_1 == 'Special cause concern', 'Special cause variation', ifelse(rule_2 %in% c('Run above (shift)', 'Run below (shift)'), 'Special cause variation', ifelse(rule_3 %in% c('Trend down (drift)', 'Trend up (drift)'), 'Special cause variation', 'Common cause variation'))), levels = c('Common cause variation', 'Special cause concern'))) 
 
+wsx_dtoc <- dtoc_ts %>% 
+  filter(Name == 'West Sussex') %>% 
+  mutate(Period = factor(Period, levels = as.character(Period)))
+
+str(wsx_dtoc)
+
+ggplot(data = wsx_dtoc, aes(x = Period, y = DTOCs, group = 1)) +
+  annotate('rect',
+           xmin = -Inf,
+           xmax = Inf,
+           ymin = wsx_dtoc$one_sigma_lci,
+           ymax = wsx_dtoc$one_sigma_uci,
+           fill = '#d2e8f5',
+           alpha = .01) +
+  annotate('rect',
+           xmin = -Inf,
+           xmax = Inf,
+           ymin = wsx_dtoc$one_sigma_uci,
+           ymax = wsx_dtoc$two_sigma_uci,
+           fill = '#ffecd4',
+           alpha = .01) +
+  annotate('rect',
+           xmin = -Inf,
+           xmax = Inf,
+           ymin = wsx_dtoc$one_sigma_lci,
+           ymax = wsx_dtoc$two_sigma_lci,
+           fill = '#ffecd4',
+           alpha = .01) +
+  annotate('rect',
+           xmin = -Inf,
+           xmax = Inf,
+           ymin = wsx_dtoc$two_sigma_uci,
+           ymax = wsx_dtoc$upper_control_limit,
+           fill = '#edcf66',
+           alpha = .01) +
+  annotate('rect',
+           xmin = -Inf,
+           xmax = Inf,
+           ymin = wsx_dtoc$two_sigma_lci,
+           ymax = wsx_dtoc$lower_control_limit,
+           fill = '#edcf66',
+           alpha = .01) +
+  geom_hline(aes(yintercept = process_mean),
+             colour = "#264852",
+             lwd = .8) +
+  geom_hline(aes(yintercept = lower_control_limit),
+             colour = "#A8423F",
+             linetype="dotted",
+             lwd = .7) +
+  geom_hline(aes(yintercept = upper_control_limit),
+             colour = "#A8423F",
+             linetype="dotted",
+             lwd = .7) +
+  geom_line(colour = '#999999') +
+  geom_point(aes(fill =  top_label,
+                 colour = top_label), 
+             size = 4, 
+             shape = 21) +
+  scale_x_discrete() +
+  scale_fill_manual(values= c("#b5a7b6","#fdbf00","#cc6633", "#61b8d2","#00fdf6","#832157","#ef4d96", '#5a535b'),
+                    breaks = c('Common cause variation', 'Close to limits', 'Special cause concern', 'Run above (shift)', 'Run below (shift)','Trend up (drift)', 'Trend down (drift)', 'Little variation'),
+                    limits = c('Common cause variation', 'Close to limits', 'Special cause concern', 'Run above (shift)', 'Run below (shift)','Trend up (drift)', 'Trend down (drift)', 'Little variation'),
+                    name = 'Variation key') +  
+  scale_colour_manual(values=  c("#b5a7b6","#fdbf00","#cc6633", "#61b8d2","#00fdf6","#832157","#ef4d96", '#5a535b'),
+                      breaks = c('Common cause variation', 'Close to limits', 'Special cause concern', 'Run above (shift)', 'Run below (shift)','Trend up (drift)', 'Trend down (drift)', 'Little variation'),
+                      limits = c('Common cause variation', 'Close to limits', 'Special cause concern', 'Run above (shift)', 'Run below (shift)','Trend up (drift)', 'Trend down (drift)', 'Little variation'),
+                      name = 'Variation key') +  
+  labs(caption = "Note: Y axis does not start at zero.\nThe red dotted lines represent 99% control limits (3σ, moving range) control limits respectively\nThe solid line represents the long term average.") +
+  theme(legend.position = "bottom", 
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5, size = 8),
+        plot.background = element_rect(fill = "white", colour = "#E2E2E3"), 
+        panel.background = element_rect(fill = '#ffffff'),
+        axis.line = element_line(colour = "#E7E7E7", size = .3),
+        axis.text = element_text(colour = "#000000", size = 8), 
+        plot.title = element_text(colour = "#000000", face = "bold", size = 10, vjust = -.5), 
+        axis.title = element_text(colour = "#000000", face = "bold", size = 8),     
+        panel.grid = element_blank(), 
+        strip.background = element_rect(fill = "#327d9c"),
+        axis.ticks = element_line(colour = "#9e9e9e"),
+        legend.key = element_rect(fill = '#ffffff'),
+        legend.text = element_text(colour = "#000000", size = 8),
+        legend.title = element_text(face = 'bold', size = 8))
 
 
